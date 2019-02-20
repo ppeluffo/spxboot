@@ -57,6 +57,24 @@
 * POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
 
+/*
+ *  Dado que no tengo forma de usar los pines de control para determinar si entro o no en
+ *  el bootload, implemento el siguiente protocolo.
+ *  Cuando arranca, envia el string "HELLO\n".
+ *  Espera hasta 10s por recibir a 9600N81 la palabra 'boot'.
+ *  Si la recibo, respondo con OK\n y ? y entro en modo bootloader.
+ *  Al expirar los 10s, si no la recibi salto al programa principal.
+ *
+ *  De este modo, cuando quiera que entre en modo bootloader, conecto una terminal a 9600
+ *  y reseteo el datalogger.
+ *  Cuando recibo 'HELLO' respondo con 'boot' y salgo del terminal y bajo el programa con
+ *  el avrdude.
+ *
+ *  Si quiero que arranque normalmente, en los 10s no trasmito nada y solo salta al programa.
+ *
+ *  Debo inicializar un timer para que cuente hasta 10s.
+ *
+ */
 #include "defines.h"
 #include "serial.h"
 #include <avr/io.h>
@@ -92,6 +110,12 @@ void PMIC_SetVectorLocationToApplication( void )
    CCP = CCP_IOREG_gc;
    PMIC.CTRL = temp;
 }
+
+void start_timer_init(void)
+{
+
+}
+
 
 /* NVM-workaround code (for ATxmega256A3 rev B) */
 #ifdef WORKAROUND
@@ -207,6 +231,84 @@ void EraseFlashBuffer(void)
     nvm_flash_flush_buffer();
 }
 
+#define PORT_GetBitValue( _port , _bitPosition ) ( (((_port)->IN) >> _bitPosition ) & 0x01 )
+
+//-----------------------------------------------------------------------------
+uint8_t boot(void)
+{
+
+
+unsigned char rxChar;
+unsigned char rxStr[5];
+int8_t i = -1;
+uint8_t retS = 0;
+
+	// Inicializo la UART y mando el mensaje de fish
+	initbootuart(); // Initialize UART a 9600 N81
+	sendchar('H'); 	// Fishing line
+	sendchar('E');
+	sendchar('L');
+	sendchar('L');
+	sendchar('O');
+	sendchar('\r');
+
+	// Inicializo y arranco el timer.
+
+	// Configuro el timer0 para contar hasta 10s.
+	// El micro arranca con un clock de 2Mhz.
+	// Pongo un prescaler de 1024.
+	// Cuento desde 0.
+	// Cada tick es de 2Mhz/1024 o sea 0.5ms.
+	// Para llegar a 10s debo contar hasta 20000.
+
+	TCC0.CNT = 0x00;		// Arranco en 0.
+	TCC0.CTRLA = 0x07;	// Prescaler a 1024 y arranco el timer.
+
+	// Loop de espera
+	while ( TCC0.CNT < 20000 ) {
+
+		// Si recibi un dato lo leo
+		if ( UART_STATUS_REG & (1 << RECEIVE_COMPLETE_BIT)) {
+
+			// Proceso el byte recibido
+			rxChar = UART_DATA_REG;
+			switch ( rxChar ) {
+			case 'b':	// Inicio
+				i = 0;
+				rxStr[i++] = rxChar;
+				break;
+			case '\r':	// Fin
+				if ( ( rxStr[0] == 'b') & ( rxStr[1] == 'o') & ( rxStr[2] == 'o') & ( rxStr[3] == 't') ) {
+					TCC0.CTRLA = 0x00;	// Apago el timer
+					return(1);
+				}
+				break;
+			default:
+				if ( i > 0 ) {
+					rxStr[i++] = rxChar;
+				}
+			}
+
+			// Solo espero 5 bytes.
+			if ( i > 5 ) {
+				// Ya llego un string con errores. Salgo
+				break;
+			}
+		}
+
+	}
+
+	sendchar('B');
+	sendchar('Y');
+	sendchar('E');
+	sendchar('\r');
+	TCC0.CTRLA = 0x00;
+	return(0);
+
+}
+
+//-----------------------------------------------------------------------------
+
 int main(void)
 {
    ADDR_T address = 0;
@@ -218,13 +320,17 @@ int main(void)
    
    PMIC_SetVectorLocationToBoot();
    
-   
    eeprom_disable_mapping();
    
-   PROGPORT |= (1<<PROG_NO); // Enable pull-up on PROG_NO line on PROGPORT.
-   
+
+  // PROGPORT |= (1<<PROG_NO); // Enable pull-up on PROG_NO line on PROGPORT.
+  // PORTF.PIN4CTRL = PORT_OPC_PULLDOWN_gc;
+
    /* Branch to bootloader or application code? */
-   if( !(PROGPIN & (1<<PROG_NO)) ) // If PROGPIN is pulled low, enter programmingmode.
+   //if ( PORT_GetBitValue ( &PORTF, 4 ) == 1 )
+
+   if ( boot() == 1 )
+ //  if( !(PROGPIN & (1<<PROG_NO)) ) // If PROGPIN is pulled low, enter programmingmode.
    {
       initbootuart(); // Initialize UART.
 
