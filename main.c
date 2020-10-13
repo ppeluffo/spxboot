@@ -58,6 +58,18 @@
 ******************************************************************************/
 
 /*
+ *  R01 @ 2020-10-13:
+ *  El comando que manda 'A' para fijar la direccion de la página donde escribir, lleva
+ *  2 bytes AH, AL.
+ *  Esto hace que la dirección de página sea de 16 bits lo que limita el tamaño de los programas
+ *  ya que como el XMEGA256 tiene 128Kwords, necesito 17 bits y no 16.
+ *  Para solucionarlo uso el autoincrement de modo de calcular aqui la próxima dirección y no
+ *  darle bola al avrdude.
+ *  Cambios:
+ *  - En el comando 'A' ignoro los valores y no seteo el address.
+ *  - En el comando 'B', luego de grabar la página incremento el address ( en words !!! )
+ *
+ *
  *  Dado que no tengo forma de usar los pines de control para determinar si entro o no en
  *  el bootload, implemento el siguiente protocolo.
  *  Cuando arranca, envia el string "HELLO\n".
@@ -81,6 +93,8 @@
 #include "nvm.h"
 
 #define ADDR_T unsigned long
+
+#define PAGESIZE_IN_WORDS 256
 
 #ifndef REMOVE_BLOCK_SUPPORT
 unsigned char BlockLoad(unsigned int size, unsigned char mem, ADDR_T address);
@@ -250,6 +264,9 @@ uint8_t retS = 0;
 	sendchar('L');
 	sendchar('L');
 	sendchar('O');
+	sendchar('r');
+	sendchar('0');
+	sendchar('2');
 	sendchar('\r');
 
 	// Inicializo y arranco el timer.
@@ -348,10 +365,14 @@ int main(void)
 	 
 	 // Set address (2 bytes).
 	 else if(val == 'A')
-	 { // NOTE: Flash addresses are given in words, not bytes.                                            
-	    address = recchar();
-	    address <<=  8;
-	    address |= recchar(); // Read address high and low byte.
+	 { // NOTE: Flash addresses are given in words, not bytes.
+
+		// Ajuste: Descarto los datos ya que uso autoincrement
+		 recchar();
+		 recchar();
+	    //address = recchar();
+	    //address <<=  8;
+	    //address |= recchar(); // Read address high and low byte.
 	    sendchar('\r'); // Send OK back.
 	 }
 
@@ -395,11 +416,13 @@ int main(void)
 	 }
 	 
 	 // Start block load.
+	 // DEBUG: Uso autoincrement
 	 else if(val=='B')
 	 {
 	    temp_int = ((uint16_t)recchar()<<8) | recchar(); // Get block size.
 	    val = recchar(); // Get memtype.
-	    sendchar( BlockLoad(temp_int, val, address) ); // Block load.				
+	    sendchar( BlockLoad(temp_int, val, address) ); // Block load.
+	    address += PAGESIZE_IN_WORDS;
 	 }	    
 	 // Start block read.
 	 else if(val=='g')
